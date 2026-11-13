@@ -51,6 +51,8 @@ def health():
 @app.post("/clips")
 def create_clip(req: ClipRequest):
     """Synchronous prototype: one manually selected segment, not automatic AI highlights."""
+    if os.getenv("ENABLE_PROCESSING") != "true":
+        raise HTTPException(503, "Processing disabled until access controls and limits are configured")
     if not (0 <= req.start_seconds <= MAX_DURATION) or not (3 <= req.duration_seconds <= 60):
         raise HTTPException(400, "Start must be 0-3600 seconds; duration 3-60 seconds")
     if len(req.caption) > 100:

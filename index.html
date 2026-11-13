@@ -26,6 +26,7 @@ document.querySelector('#form').addEventListener('submit',async function(e){
   }
   if(result?.state==='failed')throw Error(result.error||'Video processing failed');
   if(result?.state!=='ready')throw Error('Processing timed out; please try a shorter video');
+  const clips=document.createElement('div');clips.style.cssText='display:grid;gap:8px;margin-top:12px';out.appendChild(clips);for(let i=1;i<=result.count;i++){const b=document.createElement('button');b.type='button';b.textContent='Download clip '+i+' (MP4)';b.style.marginTop='0';b.onclick=async()=>{b.disabled=true;try{const cr=await fetch(API+'/generate/'+job.job_id+'/clip/'+i,{method:'POST',headers:{'X-Access-Key':key}});if(!cr.ok)throw Error('Clip download failed');const u=URL.createObjectURL(await cr.blob());const a=document.createElement('a');a.href=u;a.download='reel-'+String(i).padStart(2,'0')+'.mp4';a.click();setTimeout(()=>URL.revokeObjectURL(u),60000);}catch(err){status.textContent=err.message;}finally{b.disabled=false;}};clips.appendChild(b);}
   const r=await fetch(API+'/generate/'+job.job_id+'/download',{method:'POST',headers:{'X-Access-Key':key}});
   if(!r.ok)throw Error('Download failed');
   const blob=await r.blob(), a=document.createElement('a'), href=URL.createObjectURL(blob);

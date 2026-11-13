@@ -12,7 +12,8 @@ from urllib.parse import urlparse, parse_qs
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from highlight_candidates import candidates
 
 app = FastAPI(title="Crips AI Processing Prototype")
 JOBS = {}
@@ -22,6 +23,11 @@ MAX_DURATION = 3600
 MAX_FILE_BYTES = 150_000_000
 PROCESSING_LOCK = threading.BoundedSemaphore(1)
 JOB_TTL_SECONDS = 600
+
+class HighlightRequest(BaseModel):
+    url: str
+    count: int = Field(default=15, ge=5, le=15)
+    duration_seconds: int = Field(default=30, ge=15, le=60)
 
 class ClipRequest(BaseModel):
     url: str
@@ -50,6 +56,33 @@ def run(command, timeout=180):
 @app.get("/health")
 def health():
     return {"status": "ok", "ffmpeg": bool(shutil.which("ffmpeg")), "yt_dlp": bool(shutil.which("yt-dlp"))}
+
+@app.post("/highlights/preview")
+def preview_highlights(req: HighlightRequest):
+    """Restricted proof of concept: returns visual activity candidate timestamps, not finished reels."""
+    if os.getenv("ENABLE_PROCESSING") != "true":
+        raise HTTPException(503, "Processing disabled until access controls and limits are configured")
+    if not PROCESSING_LOCK.acquire(blocking=False):
+        raise HTTPException(429, "Server is busy")
+    folder = Path(tempfile.mkdtemp(prefix="crips_preview_"))
+    try:
+        url = validate_youtube_url(req.url)
+        source = folder / "source.mp4"
+        run(["yt-dlp", "--no-playlist", "--max-filesize", "150M",
+             "--socket-timeout", "20", "--retries", "1", "--no-progress",
+             "-f", "best[ext=mp4][height<=720]/best[height<=720]",
+             "-o", str(source), url], timeout=180)
+        if not source.exists() or source.stat().st_size > MAX_FILE_BYTES:
+            raise RuntimeError("Video missing or exceeds size limit")
+        segments = candidates(source, req.count, req.duration_seconds)
+        return {"candidates": segments, "count": len(segments),
+                "method": "visual scene activity heuristic (not semantic AI)",
+                "note": "Preview only; no MP4 clips generated"}
+    except (subprocess.SubprocessError, RuntimeError, ValueError) as exc:
+        raise HTTPException(502, "Unable to analyze this video") from exc
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+        PROCESSING_LOCK.release()
 
 @app.post("/clips")
 def create_clip(req: ClipRequest):

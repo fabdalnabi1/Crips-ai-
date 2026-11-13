@@ -9,6 +9,7 @@ import threading
 import time
 import secrets
 import zipfile
+import logging
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
@@ -21,6 +22,7 @@ from backend.highlight_candidates import candidates
 app = FastAPI(title="Crips AI Processing Prototype")
 JOBS = {}
 BATCHES = {}
+logger = logging.getLogger("crips")
 app.add_middleware(CORSMiddleware, allow_origins=["https://fabdalnabi1.github.io"], allow_methods=["GET", "POST"], allow_headers=["Content-Type", "X-Access-Key"])
 VIDEO_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
 ALLOWED_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be", "www.youtu.be"}
@@ -72,6 +74,7 @@ def authorize(key):
 def generate_batch(job, req):
     folder = Path(tempfile.mkdtemp(prefix="crips_batch_"))
     try:
+        BATCHES[job]["state"] = "downloading"
         source = folder / "source.mp4"
         run(["yt-dlp", "--no-playlist", "--max-filesize", "150M", "--socket-timeout", "20",
              "--retries", "1", "--no-progress", "-f", "best[ext=mp4][height<=720]/best[height<=720]",
@@ -99,9 +102,26 @@ def generate_batch(job, req):
                 BATCHES[job]["progress"] = i
         source.unlink(missing_ok=True)
         BATCHES[job].update(state="ready", path=str(archive), count=len(segments))
-    except Exception:
+    except Exception as exc:
+        logger.exception("Batch %s failed at stage %s", job, BATCHES[job].get("state"))
         BATCHES[job]["state"] = "failed"
-        BATCHES[job]["error"] = "Unable to process this YouTube video. It may be restricted or exceed free server limits."
+        if isinstance(exc, subprocess.CalledProcessError):
+            details = (exc.stderr or b"").decode("utf-8", errors="replace").lower()
+            if "sign in" in details or "bot" in details or "cookies" in details:
+                reason = "YouTube requires verification from this server. The video cannot currently be downloaded here."
+            elif "requested format" in details:
+                reason = "YouTube did not offer a compatible video format."
+            elif "file is larger" in details or "max-filesize" in details:
+                reason = "This video exceeds the 150 MB free-server download limit."
+            elif "not available" in details or "private" in details:
+                reason = "This video is unavailable or restricted to this server."
+            else:
+                reason = "Video processing failed at " + BATCHES[job].get("state", "unknown") + ". Check server logs."
+        elif isinstance(exc, subprocess.TimeoutExpired):
+            reason = "The free server timed out during " + BATCHES[job].get("state", "processing") + "."
+        else:
+            reason = "Video processing failed at " + BATCHES[job].get("state", "unknown") + ". Check server logs."
+        BATCHES[job]["error"] = reason
         shutil.rmtree(folder, ignore_errors=True)
     finally:
         PROCESSING_LOCK.release()

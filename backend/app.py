@@ -25,6 +25,8 @@ BATCHES = {}
 logger = logging.getLogger("crips")
 app.add_middleware(CORSMiddleware, allow_origins=["https://fabdalnabi1.github.io"], allow_methods=["GET", "POST"], allow_headers=["Content-Type", "X-Access-Key"])
 VIDEO_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
+DRIVE_HOSTS = {"drive.google.com", "www.drive.google.com"}
+DRIVE_ID = re.compile(r"^[A-Za-z0-9_-]{10,100}$")
 ALLOWED_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be", "www.youtu.be"}
 MAX_DURATION = 3600
 MAX_FILE_BYTES = 150_000_000
@@ -57,6 +59,32 @@ def validate_youtube_url(value: str) -> str:
         raise HTTPException(400, "Invalid YouTube video ID")
     return "https://www.youtube.com/watch?v=" + video_id
 
+def validate_source_url(value: str) -> tuple[str, str]:
+    u = urlparse(value)
+    if u.scheme == "https" and u.hostname in DRIVE_HOSTS and not u.username and not u.password and not u.port:
+        parts = u.path.strip("/").split("/")
+        file_id = parts[2] if len(parts) >= 3 and parts[:2] == ["file", "d"] else parse_qs(u.query).get("id", [""])[0] if parts[0] == "uc" else ""
+        if not DRIVE_ID.fullmatch(file_id):
+            raise HTTPException(400, "Use a public Google Drive file sharing link")
+        return "drive", file_id
+    return "youtube", validate_youtube_url(value)
+
+def fetch_source(value: str, target: Path):
+    kind, identifier = validate_source_url(value)
+    if kind == "drive":
+        run(["python", "-m", "gdown", "--id", identifier, "-O", str(target)], timeout=180)
+    else:
+        run(["yt-dlp", "--js-runtimes", "node", "--no-playlist", "--max-filesize", "150M",
+             "--socket-timeout", "20", "--retries", "1", "--no-progress",
+             "-f", "best[ext=mp4][height<=720]/best[height<=720]",
+             "-o", str(target), identifier], timeout=180)
+    if not target.is_file() or target.stat().st_size > MAX_FILE_BYTES:
+        raise RuntimeError("Source missing or exceeds 150 MB")
+    with target.open("rb") as f:
+        header = f.read(4096)
+    if b"ftyp" not in header[:64]:
+        raise RuntimeError("File is not a supported MP4 video")
+
 def run(command, timeout=180):
     return subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
 
@@ -76,9 +104,7 @@ def generate_batch(job, req):
     try:
         BATCHES[job]["state"] = "downloading"
         source = folder / "source.mp4"
-        run(["yt-dlp", "--js-runtimes", "node", "--no-playlist", "--max-filesize", "150M", "--socket-timeout", "20",
-             "--retries", "1", "--no-progress", "-f", "best[ext=mp4][height<=720]/best[height<=720]",
-             "-o", str(source), validate_youtube_url(req.url)], timeout=180)
+        fetch_source(req.url, source)
         if not source.exists() or source.stat().st_size > MAX_FILE_BYTES:
             raise RuntimeError("Source is unavailable or too large")
         BATCHES[job]["state"] = "analyzing"
@@ -129,7 +155,7 @@ def generate_batch(job, req):
 @app.post("/generate")
 def generate(req: HighlightRequest, x_access_key: str = Header(default="")):
     authorize(x_access_key)
-    validate_youtube_url(req.url)
+    validate_source_url(req.url)
     if not PROCESSING_LOCK.acquire(blocking=False):
         raise HTTPException(429, "Server busy. Try later.")
     for old, data in list(BATCHES.items()):

@@ -221,6 +221,19 @@ def generate_download(job: str, x_access_key: str = Header(default="")):
         raise HTTPException(404, "Download unavailable")
     return FileResponse(data["path"], media_type="application/zip", filename="crips-reels.zip")
 
+@app.post("/generate/{job}/clip/{number}")
+def download_single_clip(job: str, number: int, x_access_key: str = Header(default="")):
+    authorize(x_access_key)
+    data = BATCHES.get(job)
+    if not data or data["state"] != "ready" or time.time() - data["created"] > JOB_TTL_SECONDS:
+        raise HTTPException(404, "Clip unavailable")
+    if number < 1 or number > data["count"]:
+        raise HTTPException(404, "Invalid clip number")
+    path = Path(data["path"]).parent / ("reel-%02d.mp4" % number)
+    if not path.is_file():
+        raise HTTPException(404, "Clip file missing")
+    return FileResponse(str(path), media_type="video/mp4", filename=path.name)
+
 @app.post("/highlights/preview")
 def preview_highlights(req: HighlightRequest):
     """Restricted proof of concept: returns visual activity candidate timestamps, not finished reels."""

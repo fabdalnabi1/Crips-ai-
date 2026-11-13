@@ -13,7 +13,7 @@ from urllib.parse import urlparse, parse_qs
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
-from highlight_candidates import candidates
+from backend.highlight_candidates import candidates
 
 app = FastAPI(title="Crips AI Processing Prototype")
 JOBS = {}

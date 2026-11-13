@@ -1,0 +1,8 @@
+# Deployment blueprint only. Requires user-approved hosting and security hardening.
+services:
+  - type: web
+    name: crips-ai-processing
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    autoDeployTrigger: off

@@ -1,11 +1,12 @@
 """Crips AI prototype backend. Only process videos you own or have rights to use."""
-import ipaddress
 import os
 import re
 import shutil
 import subprocess
 import tempfile
 import uuid
+import threading
+import time
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
@@ -18,7 +19,9 @@ JOBS = {}
 VIDEO_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
 ALLOWED_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be", "www.youtu.be"}
 MAX_DURATION = 3600
-MAX_FILE_BYTES = 750_000_000
+MAX_FILE_BYTES = 150_000_000
+PROCESSING_LOCK = threading.BoundedSemaphore(1)
+JOB_TTL_SECONDS = 600
 
 class ClipRequest(BaseModel):
     url: str
@@ -61,35 +64,48 @@ def create_clip(req: ClipRequest):
         raise HTTPException(503, "FFmpeg and yt-dlp must be installed on the processing server")
     url = validate_youtube_url(req.url)
     job = uuid.uuid4().hex
+    if not PROCESSING_LOCK.acquire(blocking=False):
+        raise HTTPException(429, "Server is busy. Try again later.")
+    for old_id, old in list(JOBS.items()):
+        if time.time() - old["created"] > JOB_TTL_SECONDS:
+            shutil.rmtree(Path(old["path"]).parent, ignore_errors=True)
+            JOBS.pop(old_id, None)
     folder = Path(tempfile.mkdtemp(prefix="crips_"))
     source = folder / "source.mp4"
     output = folder / "short.mp4"
     try:
-        run(["yt-dlp", "--no-playlist", "--max-filesize", "750M",
+        run(["yt-dlp", "--no-playlist", "--max-filesize", "150M",
              "--socket-timeout", "20", "--retries", "1", "--no-progress",
              "-f", "best[ext=mp4][height<=720]/best[height<=720]",
              "-o", str(source), url], timeout=180)
         if not source.exists() or source.stat().st_size > MAX_FILE_BYTES:
             raise RuntimeError("Video download missing or too large")
-        # Fixed 9:16 crop with audio; captions are a future feature.
+        # 9:16 crop; optional small centered user-supplied caption.
+        vf = "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280"
+        if req.caption.strip():
+            caption_file = folder / "caption.txt"
+            caption_file.write_text(req.caption.strip(), encoding="utf-8")
+            vf += ",drawtext=textfile=" + str(caption_file) + ":fontcolor=white:fontsize=27:borderw=3:bordercolor=black:x=(w-text_w)/2:y=(h-text_h)/2"
         run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
              "-ss", str(req.start_seconds), "-i", str(source),
              "-t", str(req.duration_seconds), "-vf",
-             "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
+             vf,
              "-c:v", "libx264", "-preset", "veryfast", "-crf", "26",
              "-c:a", "aac", "-movflags", "+faststart", str(output)], timeout=240)
         if not output.exists() or output.stat().st_size == 0:
             raise RuntimeError("No clip was generated")
         source.unlink(missing_ok=True)
-        JOBS[job] = str(output)
-        return {"job_id": job, "download_url": "/clips/" + job, "note": "Manual segment only; no AI highlight detection or captions yet"}
+        JOBS[job] = {"path": str(output), "created": time.time()}
+        return {"job_id": job, "download_url": "/clips/" + job, "note": "Manual segment with optional caption; automatic highlights not yet available"}
     except (subprocess.SubprocessError, RuntimeError) as exc:
         shutil.rmtree(folder, ignore_errors=True)
         raise HTTPException(502, "Video processing failed; verify access, permissions, format and server limits") from exc
+    finally:
+        PROCESSING_LOCK.release()
 
 @app.get("/clips/{job_id}")
 def download_clip(job_id: str):
-    path = JOBS.get(job_id)
-    if not path or not Path(path).is_file():
+    item = JOBS.get(job_id)
+    if not item or time.time() - item["created"] > JOB_TTL_SECONDS or not Path(item["path"]).is_file():
         raise HTTPException(404, "Clip not found")
-    return FileResponse(path, media_type="video/mp4", filename="crips-short.mp4")
+    return FileResponse(item["path"], media_type="video/mp4", filename="crips-short.mp4")

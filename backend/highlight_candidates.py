@@ -32,7 +32,7 @@ def candidates(video_path, count=15, clip_seconds=30):
         pass
     # Audio RMS levels detect intense moments even when gameplay has few scene cuts.
     try:
-        proc = _run(["ffmpeg", "-hide_banner", "-loglevel", "info", "-i", str(video_path), "-vn", "-af", "astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level", "-f", "null", "-"], 180)
+        proc = _run(["ffmpeg", "-hide_banner", "-loglevel", "info", "-i", str(video_path), "-vn", "-af", "astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level:file=-", "-f", "null", "-"], 180)
         for block in re.split(r"(?=frame:\\d+)", proc.stdout):
             time_match = re.search(r"pts_time:([0-9.]+)", block)
             level_match = re.search(r"lavfi.astats.Overall.RMS_level=(-?[0-9.]+)", block)

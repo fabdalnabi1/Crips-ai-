@@ -26,7 +26,7 @@ document.querySelector('#form').addEventListener('submit',async function(e){
   }
   if(result?.state==='failed')throw Error(result.error||'Video processing failed');
   if(result?.state!=='ready')throw Error('Processing timed out; please try a shorter video');
-  const r=await fetch(API+'/generate/'+job.job_id+'/download?key='+encodeURIComponent(key));
+  const r=await fetch(API+'/generate/'+job.job_id+'/download',{method:'POST',headers:{'X-Access-Key':key}});
   if(!r.ok)throw Error('Download failed');
   const blob=await r.blob(), a=document.createElement('a'), href=URL.createObjectURL(blob);
   a.href=href;a.download='crips-reels.zip';a.textContent='Download '+result.count+' reels (ZIP)';

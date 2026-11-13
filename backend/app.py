@@ -13,7 +13,7 @@ import logging
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException, Header, Request
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -99,12 +99,15 @@ def authorize(key):
     if not secrets.compare_digest(key or "", secret):
         raise HTTPException(401, "Invalid access key")
 
-def generate_batch(job, req):
+def generate_batch(job, req, uploaded_path=None):
     folder = Path(tempfile.mkdtemp(prefix="crips_batch_"))
     try:
         BATCHES[job]["state"] = "downloading"
         source = folder / "source.mp4"
-        fetch_source(req.url, source)
+        if uploaded_path:
+            shutil.move(str(uploaded_path), str(source))
+        else:
+            fetch_source(req.url, source)
         if not source.exists() or source.stat().st_size > MAX_FILE_BYTES:
             raise RuntimeError("Source is unavailable or too large")
         BATCHES[job]["state"] = "analyzing"
@@ -151,6 +154,8 @@ def generate_batch(job, req):
         BATCHES[job]["error"] = reason
         shutil.rmtree(folder, ignore_errors=True)
     finally:
+        if uploaded_path:
+            Path(uploaded_path).unlink(missing_ok=True)
         PROCESSING_LOCK.release()
 
 @app.post("/generate")
@@ -168,6 +173,38 @@ def generate(req: HighlightRequest, x_access_key: str = Header(default="")):
     BATCHES[job] = {"created": time.time(), "state": "queued", "progress": 0, "count": req.count}
     threading.Thread(target=generate_batch, args=(job, req), daemon=True).start()
     return {"job_id": job}
+
+@app.post("/generate-upload")
+async def generate_upload(request: Request, x_access_key: str = Header(default="")):
+    authorize(x_access_key)
+    try:
+        count = int(request.query_params.get("count", "5"))
+        duration = int(request.query_params.get("duration_seconds", "30"))
+        req = HighlightRequest(url="uploaded", count=count, duration_seconds=duration)
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Invalid clip settings")
+    if not PROCESSING_LOCK.acquire(blocking=False):
+        raise HTTPException(429, "Server busy. Try later.")
+    fd, temp_name = tempfile.mkstemp(prefix="crips_upload_", suffix=".mp4")
+    size = 0
+    try:
+        with os.fdopen(fd, "wb") as output:
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > MAX_FILE_BYTES:
+                    raise HTTPException(413, "Video exceeds 150 MB")
+                output.write(chunk)
+        with open(temp_name, "rb") as source:
+            if b"ftyp" not in source.read(64):
+                raise HTTPException(400, "Only MP4 videos are supported")
+        job = uuid.uuid4().hex
+        BATCHES[job] = {"created": time.time(), "state": "queued", "progress": 0, "count": count}
+        threading.Thread(target=generate_batch, args=(job, req, temp_name), daemon=True).start()
+        return {"job_id": job}
+    except BaseException:
+        Path(temp_name).unlink(missing_ok=True)
+        PROCESSING_LOCK.release()
+        raise
 
 @app.get("/generate/{job}")
 def generate_status(job: str, x_access_key: str = Header(default="")):

@@ -128,7 +128,6 @@ def generate_batch(job, req, uploaded_path=None):
                      "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
                      "-c:a", "aac", "-movflags", "+faststart", str(clip)], timeout=180)
                 z.write(clip, clip.name)
-                clip.unlink()
                 BATCHES[job]["progress"] = i
         source.unlink(missing_ok=True)
         BATCHES[job].update(state="ready", path=str(archive), count=len(segments))
@@ -138,7 +137,7 @@ def generate_batch(job, req, uploaded_path=None):
         if isinstance(exc, subprocess.CalledProcessError):
             details = (exc.stderr or b"").decode("utf-8", errors="replace").lower()
             if "sign in" in details or "bot" in details or "cookies" in details:
-                reason = "YouTube requires verification from this server. The video cannot currently be downloaded here."
+                reason = "YouTube blocked this server with an anti-bot verification. This cannot be resolved by changing your access key. Use the MP4 upload option for a video you have permission to process."
             elif "requested format" in details:
                 reason = "YouTube did not offer a compatible video format."
             elif "file is larger" in details or "max-filesize" in details:

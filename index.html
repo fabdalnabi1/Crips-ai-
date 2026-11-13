@@ -8,15 +8,15 @@ document.querySelector('#form').addEventListener('submit',async function(e){
  e.preventDefault();const status=document.querySelector('#status'), out=document.querySelector('#download'), btn=this.querySelector('button');
  out.replaceChildren();btn.disabled=true;status.textContent='Starting...';
  try{
-  const raw=document.querySelector("#url").value.trim();if(!raw&&!document.querySelector("#videoFile").files.length)throw Error("Enter a video link or select an MP4");const url=new URL(raw||"https://www.youtube.com/");
+  const raw=document.querySelector("#url").value.trim();if(!raw&&!document.querySelector("#videoFile").files.length)throw Error("Enter a video link or select an MP4");const videoSelected=!!document.querySelector('#videoFile').files.length;const url=videoSelected?null:new URL(raw);
   const allowed=['youtube.com','www.youtube.com','m.youtube.com','youtu.be','www.youtu.be','drive.google.com','www.drive.google.com'];
-  if(!document.querySelector("#videoFile").files.length && !allowed.includes(url.hostname.toLowerCase()))throw Error('Enter a YouTube or public Google Drive video link');
+  if(!videoSelected && !allowed.includes(url.hostname.toLowerCase()))throw Error('Enter a YouTube or public Google Drive video link');
   const count=Number(document.querySelector('#clipCount').value);
   if(!Number.isInteger(count)||count<5||count>15)throw Error('Choose 5–15 reels');
   const key=document.querySelector('#accessKey').value;
   const video=document.querySelector('#videoFile').files[0];if(video&&(video.size>150000000||video.type!=='video/mp4'))throw Error('Select an MP4 smaller than 150 MB');
   const res=video?await fetch(API+'/generate-upload?count='+count+'&duration_seconds='+Number(document.querySelector('#duration').value),{method:'POST',headers:{'Content-Type':'video/mp4','X-Access-Key':key},body:video}):await fetch(API+'/generate',{method:'POST',headers:{'Content-Type':'application/json','X-Access-Key':key},body:JSON.stringify({url:url.href,count,duration_seconds:Number(document.querySelector('#duration').value)})});
-  if(!res.ok)throw Error('Server rejected request ('+res.status+'). Check access key and server availability.');
+  if(!res.ok){let detail='';try{const body=await res.json();detail=typeof body.detail==='string'?body.detail:'';}catch{}throw Error(detail||'Server rejected request ('+res.status+'). Check access key and server availability.');}
   const job=await res.json();let result;
   for(let n=0;n<120;n++){
     await wait(3000);
@@ -32,7 +32,7 @@ document.querySelector('#form').addEventListener('submit',async function(e){
   if(!r.ok)throw Error('Download failed');
   const blob=await r.blob(), a=document.createElement('a'), href=URL.createObjectURL(blob);
   a.href=href;a.download='crips-reels.zip';a.textContent='Download '+result.count+' reels (ZIP)';
-  a.style.color='#dbb56c';a.style.display='block';a.style.marginTop='12px';out.appendChild(a);a.click();
+  a.style.color='#dbb56c';a.style.display='block';a.style.marginTop='12px';out.appendChild(a);
   setTimeout(()=>URL.revokeObjectURL(href),60000);
  }catch(err){status.textContent=err.message||'Unable to generate reels';}
  finally{btn.disabled=false;}

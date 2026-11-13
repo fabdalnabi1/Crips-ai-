@@ -31,7 +31,7 @@ ALLOWED_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be", 
 MAX_DURATION = 3600
 MAX_FILE_BYTES = 150_000_000
 PROCESSING_LOCK = threading.BoundedSemaphore(1)
-JOB_TTL_SECONDS = 600
+JOB_TTL_SECONDS = 3600
 
 class HighlightRequest(BaseModel):
     url: str
@@ -109,6 +109,7 @@ def generate_batch(job, req):
             raise RuntimeError("Source is unavailable or too large")
         BATCHES[job]["state"] = "analyzing"
         segments = candidates(source, req.count, req.duration_seconds)
+        BATCHES[job]["segments"] = segments
         if not segments:
             raise RuntimeError("No eligible highlights")
         archive = folder / "crips-reels.zip"
@@ -174,7 +175,7 @@ def generate_status(job: str, x_access_key: str = Header(default="")):
     data = BATCHES.get(job)
     if not data or time.time() - data["created"] > JOB_TTL_SECONDS:
         raise HTTPException(404, "Job expired")
-    return {"state": data["state"], "progress": data["progress"], "count": data["count"], "error": data.get("error")}
+    return {"state": data["state"], "progress": data["progress"], "count": data["count"], "error": data.get("error"), "segments": data.get("segments", []) if data["state"] in ("rendering", "ready") else []}
 
 @app.get("/generate/{job}/download")
 def generate_download(job: str, key: str = ""):

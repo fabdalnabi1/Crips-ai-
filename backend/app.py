@@ -76,7 +76,7 @@ def generate_batch(job, req):
     try:
         BATCHES[job]["state"] = "downloading"
         source = folder / "source.mp4"
-        run(["yt-dlp", "--no-playlist", "--max-filesize", "150M", "--socket-timeout", "20",
+        run(["yt-dlp", "--js-runtimes", "node", "--no-playlist", "--max-filesize", "150M", "--socket-timeout", "20",
              "--retries", "1", "--no-progress", "-f", "best[ext=mp4][height<=720]/best[height<=720]",
              "-o", str(source), validate_youtube_url(req.url)], timeout=180)
         if not source.exists() or source.stat().st_size > MAX_FILE_BYTES:
@@ -169,7 +169,7 @@ def preview_highlights(req: HighlightRequest):
     try:
         url = validate_youtube_url(req.url)
         source = folder / "source.mp4"
-        run(["yt-dlp", "--no-playlist", "--max-filesize", "150M",
+        run(["yt-dlp", "--js-runtimes", "node", "--no-playlist", "--max-filesize", "150M",
              "--socket-timeout", "20", "--retries", "1", "--no-progress",
              "-f", "best[ext=mp4][height<=720]/best[height<=720]",
              "-o", str(source), url], timeout=180)
@@ -208,7 +208,7 @@ def create_clip(req: ClipRequest):
     source = folder / "source.mp4"
     output = folder / "short.mp4"
     try:
-        run(["yt-dlp", "--no-playlist", "--max-filesize", "150M",
+        run(["yt-dlp", "--js-runtimes", "node", "--no-playlist", "--max-filesize", "150M",
              "--socket-timeout", "20", "--retries", "1", "--no-progress",
              "-f", "best[ext=mp4][height<=720]/best[height<=720]",
              "-o", str(source), url], timeout=180)

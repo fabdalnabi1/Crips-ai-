@@ -7,16 +7,21 @@ import tempfile
 import uuid
 import threading
 import time
+import secrets
+import zipfile
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header
 from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from backend.highlight_candidates import candidates
 
 app = FastAPI(title="Crips AI Processing Prototype")
 JOBS = {}
+BATCHES = {}
+app.add_middleware(CORSMiddleware, allow_origins=["https://fabdalnabi1.github.io"], allow_methods=["GET", "POST"], allow_headers=["Content-Type", "X-Access-Key"])
 VIDEO_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
 ALLOWED_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be", "www.youtu.be"}
 MAX_DURATION = 3600
@@ -56,6 +61,82 @@ def run(command, timeout=180):
 @app.get("/health")
 def health():
     return {"status": "ok", "ffmpeg": bool(shutil.which("ffmpeg")), "yt_dlp": bool(shutil.which("yt-dlp"))}
+
+def authorize(key):
+    secret = os.getenv("CRIPS_ACCESS_KEY", "")
+    if os.getenv("ENABLE_PROCESSING") != "true" or not secret:
+        raise HTTPException(503, "Processing is not enabled")
+    if not secrets.compare_digest(key or "", secret):
+        raise HTTPException(401, "Invalid access key")
+
+def generate_batch(job, req):
+    folder = Path(tempfile.mkdtemp(prefix="crips_batch_"))
+    try:
+        source = folder / "source.mp4"
+        run(["yt-dlp", "--no-playlist", "--max-filesize", "150M", "--socket-timeout", "20",
+             "--retries", "1", "--no-progress", "-f", "best[ext=mp4][height<=720]/best[height<=720]",
+             "-o", str(source), validate_youtube_url(req.url)], timeout=180)
+        if not source.exists() or source.stat().st_size > MAX_FILE_BYTES:
+            raise RuntimeError("Source is unavailable or too large")
+        BATCHES[job]["state"] = "analyzing"
+        segments = candidates(source, req.count, req.duration_seconds)
+        if not segments:
+            raise RuntimeError("No eligible highlights")
+        archive = folder / "crips-reels.zip"
+        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_STORED) as z:
+            for i, seg in enumerate(segments, 1):
+                BATCHES[job]["state"] = "rendering"
+                BATCHES[job]["progress"] = i - 1
+                clip = folder / ("reel-%02d.mp4" % i)
+                run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                     "-ss", str(seg["start_seconds"]), "-i", str(source),
+                     "-t", str(seg["duration_seconds"]), "-vf",
+                     "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280",
+                     "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+                     "-c:a", "aac", "-movflags", "+faststart", str(clip)], timeout=180)
+                z.write(clip, clip.name)
+                clip.unlink()
+                BATCHES[job]["progress"] = i
+        source.unlink(missing_ok=True)
+        BATCHES[job].update(state="ready", path=str(archive), count=len(segments))
+    except Exception:
+        BATCHES[job]["state"] = "failed"
+        BATCHES[job]["error"] = "Unable to process this YouTube video. It may be restricted or exceed free server limits."
+        shutil.rmtree(folder, ignore_errors=True)
+    finally:
+        PROCESSING_LOCK.release()
+
+@app.post("/generate")
+def generate(req: HighlightRequest, x_access_key: str = Header(default="")):
+    authorize(x_access_key)
+    validate_youtube_url(req.url)
+    if not PROCESSING_LOCK.acquire(blocking=False):
+        raise HTTPException(429, "Server busy. Try later.")
+    for old, data in list(BATCHES.items()):
+        if time.time() - data["created"] > JOB_TTL_SECONDS:
+            if data.get("path"):
+                shutil.rmtree(Path(data["path"]).parent, ignore_errors=True)
+            BATCHES.pop(old, None)
+    job = uuid.uuid4().hex
+    BATCHES[job] = {"created": time.time(), "state": "queued", "progress": 0, "count": req.count}
+    threading.Thread(target=generate_batch, args=(job, req), daemon=True).start()
+    return {"job_id": job}
+
+@app.get("/generate/{job}")
+def generate_status(job: str, x_access_key: str = Header(default="")):
+    authorize(x_access_key)
+    data = BATCHES.get(job)
+    if not data or time.time() - data["created"] > JOB_TTL_SECONDS:
+        raise HTTPException(404, "Job expired")
+    return {"state": data["state"], "progress": data["progress"], "count": data["count"], "error": data.get("error")}
+
+@app.get("/generate/{job}/download")
+def generate_download(job: str, key: str = ""):
+    authorize(key)
+    data = BATCHES.get(job)
+    if not data or data["state"] != "ready" or time.time() - data["created"] > JOB_TTL_SECONDS:
+        raise HTTPException(404, "Download unavailable")
+    return FileResponse(data["path"], media_type="application/zip", filename="crips-reels.zip")
 
 @app.post("/highlights/preview")
 def preview_highlights(req: HighlightRequest):

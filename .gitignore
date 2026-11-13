@@ -1,0 +1,11 @@
+*.mp4
+*.mov
+*.webm
+*.mkv
+.env
+.env.*
+!.env.example
+downloads/
+output/
+private/
+__pycache__/

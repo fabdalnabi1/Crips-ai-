@@ -177,9 +177,9 @@ def generate_status(job: str, x_access_key: str = Header(default="")):
         raise HTTPException(404, "Job expired")
     return {"state": data["state"], "progress": data["progress"], "count": data["count"], "error": data.get("error"), "segments": data.get("segments", []) if data["state"] in ("rendering", "ready") else []}
 
-@app.get("/generate/{job}/download")
-def generate_download(job: str, key: str = ""):
-    authorize(key)
+@app.post("/generate/{job}/download")
+def generate_download(job: str, x_access_key: str = Header(default="")):
+    authorize(x_access_key)
     data = BATCHES.get(job)
     if not data or data["state"] != "ready" or time.time() - data["created"] > JOB_TTL_SECONDS:
         raise HTTPException(404, "Download unavailable")

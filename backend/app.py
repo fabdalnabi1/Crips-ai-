@@ -103,7 +103,7 @@ def generate_batch(job, req):
         source.unlink(missing_ok=True)
         BATCHES[job].update(state="ready", path=str(archive), count=len(segments))
     except Exception as exc:
-        logger.exception("Batch %s failed at stage %s", job, BATCHES[job].get("state"))
+        logger.exception("Batch %s failed at stage %s; extractor stderr: %.1600s", job, BATCHES[job].get("state"), (exc.stderr or b"").decode("utf-8", errors="replace") if isinstance(exc, subprocess.CalledProcessError) else "")
         BATCHES[job]["state"] = "failed"
         if isinstance(exc, subprocess.CalledProcessError):
             details = (exc.stderr or b"").decode("utf-8", errors="replace").lower()

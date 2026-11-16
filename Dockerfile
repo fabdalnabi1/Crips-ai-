@@ -1,11 +1,22 @@
 FROM node:22-bookworm-slim AS node_runtime
-FROM python:3.12-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+FROM python:3.12-slim-bookworm
+ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 HF_HUB_DISABLE_XET=1 \
+    OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 FLUXCLIP_DEVICE=cpu \
+    FLUXCLIP_COMPUTE_TYPE=int8 FLUXCLIP_DATA=/tmp/crips-studio \
+    FLUXCLIP_CACHE=/tmp/crips-cache CRIPS_MODEL_PATH=/opt/models/tiny
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg git ca-certificates fontconfig fonts-dejavu-core espeak-ng \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=node_runtime /usr/local/bin/node /usr/local/bin/node
 WORKDIR /app
-COPY backend/requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r /app/requirements.txt
+RUN git clone https://github.com/shahid2866/fluxclip.git /opt/fluxclip \
+    && cd /opt/fluxclip && git checkout a9a28a4b4aca2900bd54e77207b748bbb0da9a24 \
+    && pip install --no-cache-dir '.[studio]' 'yt-dlp[default]>=2025.10' \
+    && cp LICENSE /app/FLUXCLIP-LICENSE \
+    && rm -rf /opt/fluxclip/.git
+RUN python -c "from faster_whisper.utils import download_model; download_model('tiny', output_dir='/opt/models/tiny')"
 COPY backend /app/backend
-ENV PORT=8000
-EXPOSE 8000
-CMD ["sh","-c","uvicorn backend.app:app --host 0.0.0.0 --port ${PORT:-8000}"]
+RUN python -m py_compile /app/backend/studio_gateway.py \
+    && python -c "from backend.studio_gateway import app; print('Crips API import OK')"
+EXPOSE 10000
+CMD ["sh","-c","exec uvicorn backend.studio_gateway:app --host 0.0.0.0 --port ${PORT:-10000} --workers 1 --no-access-log"]

@@ -1,0 +1,30 @@
+# Crips AI / FluxClip migration (experimental)
+# Runs the upstream MIT-licensed FluxClip Studio as two containers.
+# Requires Docker Compose and a machine/server with enough RAM for Whisper.
+# This is NOT yet a Render free-plan deployment.
+services:
+  api:
+    build:
+      context: https://github.com/shahid2866/fluxclip.git
+      dockerfile: Dockerfile
+    environment:
+      FLUXCLIP_DATA: /data
+      FLUXCLIP_CACHE: /data/cache
+      HF_HOME: /data/cache/huggingface
+      ANTHROPIC_API_KEY: ""
+      OPENAI_API_KEY: ""
+    volumes:
+      - crips_fluxclip_data:/data
+    restart: unless-stopped
+  web:
+    build:
+      context: https://github.com/shahid2866/fluxclip.git#main:web
+      args:
+        FLUXCLIP_API_URL: http://api:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+    restart: unless-stopped
+volumes:
+  crips_fluxclip_data:

@@ -1,10 +1,5 @@
-"""Bounded, opt-in import diagnostic using a CC-BY Blender open movie.
-
-Not an access-control bypass. Never uses cookies, proxies or alternate clients.
-Only logs a short result; media is deleted after inspection.
-"""
+"""Opt-in, bounded public-source import check. No access-control bypass."""
 from __future__ import annotations
-
 import json
 import logging
 import os
@@ -23,7 +18,7 @@ log = logging.getLogger('crips.import_check')
 
 
 def classify(message: str) -> str:
-    text = message.lower()
+    text = str(message).lower()
     if 'age-restricted' in text or 'confirm your age' in text:
         return 'YOUTUBE_AGE_RESTRICTED'
     if 'not a bot' in text or 'sign in to confirm' in text:
@@ -32,6 +27,8 @@ def classify(message: str) -> str:
         return 'YOUTUBE_RATE_LIMITED'
     if 'private video' in text or 'unavailable' in text:
         return 'VIDEO_UNAVAILABLE'
+    if 'requested format' in text:
+        return 'FORMAT_UNAVAILABLE'
     if 'larger than' in text:
         return 'TEST_SIZE_LIMIT'
     return 'IMPORT_TEST_FAILED'
@@ -42,14 +39,17 @@ def check_source() -> dict:
         cmd = [sys.executable, '-m', 'yt_dlp', '--ignore-config', '--no-playlist',
                '--js-runtimes', 'node', '--no-progress', '--no-warnings',
                '--socket-timeout', '15', '--retries', '0', '--fragment-retries', '0',
-               '--max-filesize', '64M', '--format', 'b[height<=360][ext=mp4]/b[height<=360]',
+               '--max-filesize', '64M', '--format', 'bv*[height<=360]+ba/b[height<=360]',
+               '--merge-output-format', 'mp4',
+               '--match-filters', '!is_live & age_limit<18 & duration<=600',
                '--output', str(Path(tmp) / 'source.%(ext)s'), SAMPLE]
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
         except subprocess.TimeoutExpired:
             return {'state': 'failed', 'code': 'IMPORT_TEST_TIMEOUT'}
         if proc.returncode:
-            return {'state': 'blocked', 'code': classify(proc.stderr)}
+            code = classify(proc.stderr)
+            return {'state': 'blocked' if code.startswith('YOUTUBE_') else 'failed', 'code': code}
         files = [f for f in Path(tmp).glob('source.*')
                  if f.suffix in {'.mp4', '.webm', '.mkv'} and f.is_file()]
         if not files:
@@ -71,7 +71,7 @@ def check_source() -> dict:
 
 
 def install(app) -> None:
-    """Disabled by default; run once per instance only when explicitly enabled."""
+    """Disabled by default. An authorized operator explicitly enables diagnostics."""
     previous = app.router.lifespan_context
 
     def work():

@@ -65,3 +65,7 @@ def transcribe(video, model_size=None, language=None, on_progress=None, **kwargs
 
 
 jobs.transcribe = transcribe
+
+# Only runs when an operator explicitly opts in; normal processing is unchanged.
+from backend.youtube_probe import install as install_import_diagnostic
+install_import_diagnostic(app)

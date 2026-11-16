@@ -16,7 +16,7 @@ RUN git clone https://github.com/shahid2866/fluxclip.git /opt/fluxclip \
     && rm -rf /opt/fluxclip/.git
 RUN python -c "from faster_whisper.utils import download_model; download_model('tiny', output_dir='/opt/models/tiny')"
 COPY backend /app/backend
-RUN python -m py_compile /app/backend/studio_gateway.py \
-    && python -c "from backend.studio_gateway import app; print('Crips API import OK')"
+RUN python -m py_compile /app/backend/studio_gateway.py /app/backend/transcribe_pcm.py \
+    && python -c "from backend.transcribe_pcm import app; print('Crips PCM API import OK')"
 EXPOSE 10000
-CMD ["sh","-c","exec uvicorn backend.studio_gateway:app --host 0.0.0.0 --port ${PORT:-10000} --workers 1 --no-access-log"]
+CMD ["sh","-c","exec uvicorn backend.transcribe_pcm:app --host 0.0.0.0 --port ${PORT:-10000} --workers 1 --no-access-log"]

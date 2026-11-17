@@ -69,3 +69,7 @@ jobs.transcribe = transcribe
 # Only runs when an operator explicitly opts in; normal processing is unchanged.
 from backend.youtube_probe import install as install_import_diagnostic
 install_import_diagnostic(app)
+
+# Registered, public, non-age-restricted sources only. Provider URLs stay server-side.
+from backend.imported_sources import install as install_approved_imports
+install_approved_imports(app)

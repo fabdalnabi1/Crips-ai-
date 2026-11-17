@@ -74,6 +74,17 @@ def normalize_youtube(value: str) -> str:
 
 
 def safe_error(error: str) -> str:
+    """Keep canonical import errors intact when rewrapped by the job runner."""
+    raw = str(error)
+    canonical = (
+        'YOUTUBE_AGE_RESTRICTED', 'YOUTUBE_VERIFICATION_REQUIRED',
+        'YOUTUBE_RATE_LIMITED', 'VIDEO_UNAVAILABLE',
+        'VIDEO_LIMIT_EXCEEDED', 'TRANSCRIPTION_FAILED',
+        'PROCESSING_TIMEOUT', 'PROCESSING_FAILED',
+    )
+    for code in canonical:
+        if code in raw.upper():
+            return code
     text = str(error).lower()
     if 'age-restricted' in text or 'confirm your age' in text or 'age_limit' in text:
         return 'YOUTUBE_AGE_RESTRICTED'
